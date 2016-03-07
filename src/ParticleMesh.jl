@@ -83,7 +83,6 @@ function fftfreq(iijk, dims)
     k = 2pi .* (ijk-1 - ((ijk .> (s+1)).*dims)) ./dims
 end
 
-
 function PowerSpectrumParticles(gp, gd, p)
 
     x = p["x"]
@@ -102,13 +101,22 @@ function PowerSpectrumParticles(gp, gd, p)
             ka = sqrt(k2)
             gauss = randn(2)
             PSv = sqrt(P(ka, ps))
+            println(ka)
             ak = Float64(PSv * gauss[1]/k2)
             bk = Float64(PSv * gauss[2]/k2)
-#            println(k2,":", PSv)
+
             if k2 > 0 
                 c[i,j,k] = (ak - im * bk)/2 * kf[dd]
             end
         end
+
+        if constraints
+            dx = x[1]-x[2]
+            ec = evalConstr(alpha,c)
+            Cij = icovConstr(alpha, dims, dx, ps)
+            c = constrNoise(alpha, c, Cij, ec, ci, dims, dx, ps)
+        end
+
         println(summary(c))
         Si[dd,:] = irfft(squeeze(c), dims[1])
         @show size(Si)
