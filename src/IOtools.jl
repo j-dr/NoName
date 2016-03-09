@@ -1,7 +1,7 @@
 # io routines for this code
 module IOtools
 
-export parse_commandline, write_all, load_all
+export parse_commandline, write_all, load_all, IC_output
 export write_profiling_results, load_profiling_results
 
 using JLD, HDF5, FileIO
@@ -67,6 +67,24 @@ function outputGlobalParametersText(fname,conf)
     close(f)
     @debug("Wrote ", fname)
     nothing    
+end
+
+function IC_output(fname, ics; overwrite=true)
+    if overwrite
+        f = h5open(fname,"w")
+    else
+        f = h5open(fname,"r+")
+    end
+
+    g = g_create(f, "particles")
+    g["x"] = collect(ics[1,:])
+    #if rank > 1
+    g["y"] = collect(ics[2,:])
+    #end
+    #if rank > 2
+    #    g["z"] = collect(ics[3,:])
+    #end
+    close(f)
 end
 
 function particle_output(fname, p; overwrite=false)
