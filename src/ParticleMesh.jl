@@ -1,5 +1,8 @@
 using PyPlot
+using IOtools
 include("InputPowerSpectra.jl")
+include("Constraints.jl")
+
 
 function analyzePM(gp, gd, p)
 
@@ -128,6 +131,18 @@ function PowerSpectrumParticles(gp, gd, p)
         @critical("Requested to use PowerSpectrumParticles but did not specify InputPowerSpectrum")
     end
 
+    #always either store or read white noise used to 
+    #generate initial field
+
+    storewn = true
+    if haskey(conf, "ReadWhiteNoise")
+        storewn = false
+        wnf = open(conf["ReadWhiteNoise"], "r")
+    else
+        wnf = open("wnoise.bin", "w")
+    end
+
+
     x = p["x"]
     initialize_particles_uniform(x)
 
@@ -135,29 +150,37 @@ function PowerSpectrumParticles(gp, gd, p)
     dims = conf["ParticleDimensions"]
     ndims = copy(dims)
     ndims[1] = div(dims[1],2)+1
+
     c = zeros(Complex{Float64},ndims...) #
     Si = zeros(Float64, (rank, (dims[dims .> 1])...))
+    println("dim sizes")
+    println(2*prod(ndims))
+    println(ndims[1]*dims[2]*dims[3])
+    if !storewn
+        wn = reshape(read(wnf, Float64, 2*prod(ndims)), (2,ndims...))
+    end
+
     for dd in 1:rank
         for k in 1:dims[3], j in 1:dims[2], i in 1:ndims[1]
             kf = fftfreq([i,j,k], dims)
             k2 = dot(kf,kf)
             ka = sqrt(k2)
-            gauss = randn(2)
+            if !storewn
+                gauss = wn[:,i,j,k]
+                #wn[2*(ndims[2] * (ndims[3] * (k - 1) + (j - 1)) + i):2*(ndims[2] * (ndims[3] * (k - 1) + (j - 1)) + i)+1]
+            else
+                gauss = randn(2)
+                write(wnf, gauss)
+            end
+
             PSv = sqrt(P(ka, ps))
-            println(ka)
+            
             ak = Float64(PSv * gauss[1]/k2)
             bk = Float64(PSv * gauss[2]/k2)
-
             if k2 > 0 
                 c[i,j,k] = (ak - im * bk)/2 * kf[dd]
             end
-        end
 
-        if constraints
-            dx = x[1]-x[2]
-            ec = evalConstr(alpha,c)
-            Cij = icovConstr(alpha, dims, dx, ps)
-            c = constrNoise(alpha, c, Cij, ec, ci, dims, dx, ps)
         end
 
         println(summary(c))
@@ -165,16 +188,123 @@ function PowerSpectrumParticles(gp, gd, p)
 #        @show size(Si)
     end
 
+    close(wnf)
+
     # Apply displacement field
-    for i in 1:size(x,2)5
+    for i in 1:size(x,2)
         for dd in 1:rank
             x[dd,i] += Si[dd,i]
         end
     end
+    
+    IC_output("ICs.hdf5", x)
+    karr, power = powerSpectrum(gp, gd, p)
+    writePowerSpectrum(karr,power)
+        
     # Setup velocities : Still need to implement ...
     
     nothing
 end
+
+
+function PowerSpectrumParticlesConstr(gp, gd, p)
+
+    # Initialize a PowerSpectrum if requested
+    if haskey(conf, "InputPowerSpectrum")
+        eval(parse(string("const ps = ", conf["InputPowerSpectrum"])))
+    else
+        @critical("Requested to use PowerSpectrumParticles but did not specify InputPowerSpectrum")
+    end
+
+    #always either store or read white noise used to 
+    #generate initial field
+
+    storewn = true
+    if haskey(conf, "ReadWhiteNoise")
+        storewn = false
+        wnf = open(conf["ReadWhiteNoise"], "r")
+    else
+        wnf = open("wnoise.bin", "w")
+    end
+
+    x = p["x"]
+    initialize_particles_uniform(x)
+
+    rank = size(x,1)
+    dims = conf["ParticleDimensions"]
+    ndims = copy(dims)
+    ndims[1] = div(dims[1],2)+1
+
+    #set up constraints
+    hdr, ci, pid = loadConstraintVector(constrfile)
+    global nconstr = hdr[1]
+    alpha = getConstraints(hdr[1], hdr[2], pid)
+    ks = zeros((rank,ndims...))
+
+    c = zeros(Complex{Float64},ndims...) #
+    Si = zeros(Float64, (rank, (dims[dims .> 1])...))
+    println("Shape of Si")
+    println(size(Si))
+
+    if !storewn
+        wn = reshape(read(wnf, Float64, prod(ndims)), (ndims...))
+    end
+    println(dims)
+    for k in 1:dims[3], j in 1:dims[2], i in 1:ndims[1]
+        kf = fftfreq([i,j,k], dims)
+        k2 = dot(kf,kf)
+        ka = sqrt(k2)
+        if !storewn
+            gauss = wn[2*(ndims[2] * (ndims[1] * i + j) + k): \
+                       2*(ndims[2] * (ndims[1] * i + j) + k)+1]
+        else
+            gauss = randn(2)
+            write(wnf, gauss)
+        end
+        
+        PSv = sqrt(P(ka, ps))
+        
+        ak = Float64(PSv * gauss[1])
+        bk = Float64(PSv * gauss[2])
+        ks[:,i,j,k] = kf[1:rank]
+       
+        if k2 > 0 
+            c[i,j,k] = (ak - im * bk)/2
+        end
+    end
+
+    println(dims)
+    close(wnf)
+
+    if constraints
+        dx = abs(x[1,1]-x[1,2])
+        cr = evalConstr(alpha,c,dx)
+        Cij = icovConstr(alpha, dims, dx, ps)
+        c = constrNoise(alpha, c, Cij, cr, ci, dims, dx, ps)
+    end
+
+    for dd in 1:rank
+        Sf = c.*reshape(ks[dd,:],(ndims...))
+        Si[dd,:] = irfft(squeeze(Sf), dims[1])
+    end
+
+    # Apply displacement field
+    for i in 1:size(x,2)
+        for dd in 1:rank
+            x[dd,i] += Si[dd,i]
+        end
+    end
+
+    #debugging output
+    IC_output("ICs.hdf5", x)
+    karr, power = powerSpectrum(gp, gd, p)
+    writePowerSpectrum(karr,power)
+    
+    # Setup velocities : Still need to implement ...
+    
+    nothing
+end
+
 
 
 function initialize_particles_uniform(x)
@@ -762,6 +892,13 @@ function powerSpectrum(gp, gd, p)
     power = power./counts
 
     karray, power
+end
+
+function writePowerSpectrum(karray, power, filename="powerspec.txt")
+
+    pwr = hcat(karray, power)
+    writedlm(filename, pwr)
+    
 end
 
 function evolvePMCosmology(gp, gd, p)

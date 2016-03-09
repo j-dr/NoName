@@ -1,11 +1,27 @@
-include("ParticleMesh.jl")
+#include("ParticleMesh.jl")
+
+function fftfreq(iijk, dims)
+    ijk = iijk
+    s = div(dims,2)
+    k = 2pi .* (ijk-1 - ((ijk .> (s+1)).*dims)) ./dims
+end
 
 function loadConstraintVector(filename)
     #read in a file containing the constraint
     
-    constr = readdlm(filename)
-    constr[1:end-1,:], constr[end,:]
+    cfp = open(filename, "r")
+    
+    #read header containing number of constraints
+    #and length of constraint support for each
+    hdr = read(cfp, Int64, 2)
+    
+    #Read value of constraints
+    ci = read(cfp, Float64, hdr[1])
+    
+    #read particle ids to apply constraints to
+    pid = read(cfp, Int64, prod(hdr))
 
+    hdr, ci, pid
 end
 
 function idConstraint(ids, dims)
@@ -16,37 +32,55 @@ function idConstraint(ids, dims)
 
 end
 
-function evalConstr(C, f)
+function getConstraints(nconstr, csupp, pids)
 
-    cf = zeros(f)
+    dims = conf["ParticleDimensions"]
+    Npart = prod(dims)
+    alpha = zeros(Npart, nconstr)
+    println("Get constraints")
+    println(dims)
+    count = 1
+    for i in 1:nconstr
+        alpha[pids[count:count+csupp[i]-1],i] = 1/Npart
+        count += csupp[i]
+    end
+    alpha
+
+end
+
+function evalConstr(C, f, dx)
+
+    dims = conf["ParticleDimensions"]
+    println(dims)
+    cr = zeros(Complex{Float64}, nconstr)
     ndims = copy(collect(dims))
     ndims[1] = div(dims[1],2)+1
     
     lsub = dims[1]*dx
     dk = 2*pi/lsub
     d3k = dk*dk*dk
-
-    Hi = conj(rfft(C[i]))
-    for ix in 1:ndims[1], iy in 1:dims[2], iz in 1:dims[3]
-        
-        v = Hi[ix,iy,iz]*f[ix,iy,iz]*d3k
-        if (ix>0) & (ix<ndims[1])
-            v*=2
+    println(dx)
+    println(d3k)
+    println(lsub)
+    println(dims)
+    for i in 1:nconstr
+        Hi = conj(rfft(reshape(C[:,i], tuple(dims...))))
+        for ix in 1:ndims[1], iy in 1:dims[2], iz in 1:dims[3]
+            v = Hi[ix,iy,iz]*f[ix,iy,iz]*d3k
+            if (ix>0) & (ix<ndims[1])
+                v*=2
+            end
+            cr[i] += v
         end
-        
-        cf[ix,iy,iz] += v
     end
+    println(cr[1].im)
+    println(cr[1].re)
 
-    cf
-end
-
-    
-
+    cr = [c.re for c in cr]
 end
 
 function constrNoise(C, f, Cij, ec, ecp, dims, dx, ps)
 
-    nconst = length(C)
     ndims = copy(collect(dims))
     ndims[1] = div(dims[1],2)+1
     
@@ -54,10 +88,10 @@ function constrNoise(C, f, Cij, ec, ecp, dims, dx, ps)
     dk = 2*pi/lsub
     d3k = dk*dk*dk
 
-    for i in 1:nconst
-        Hi = conj(rfft(C[i]))
+    for i in 1:nconstr
+        Hi = conj(rfft(reshape(C[:,i], tuple(dims...))))
         for j in 1:i
-            Hj = rfft(C[j])            
+            Hj = rfft(reshape(C[:,j], tuple(dims...)))            
             for ix in 1:ndims[1], iy in 1:dims[2], iz in 1:dims[3]
                 kf = fftfreq([ix,iy,iz], dims)
                 k = sqrt(dot(kf,kf))
@@ -83,8 +117,7 @@ end
 
 function icovConstr(C, dims, dx, ps)
 
-    nconst = length(C)
-    Cij = zeros((nconst, nconst))
+    Cij = zeros((nconstr, nconstr))
     ndims = copy(collect(dims))
     ndims[1] = div(dims[1],2)+1
     
@@ -92,12 +125,14 @@ function icovConstr(C, dims, dx, ps)
     dk = 2*pi/lsub
     d3k = dk*dk*dk
 
-    for i in 1:nconst
-        Hi = conj(rfft(C[i]))
+    for i in 1:nconstr
+        Hi = conj(rfft(reshape(C[:,i], tuple(dims...))))
         for j in 1:i
+            println(string("i: ",i))
+            println(string("j: ",j))
             c1 = 0.0
             c2 = 0.0
-            Hj = rfft(C[j])
+            Hj = rfft(reshape(C[:,j], tuple(dims...)))
             for ix in 1:ndims[1], iy in 1:dims[2], iz in 1:dims[3]
                 kf = fftfreq([ix,iy,iz], dims)
                 k = sqrt(dot(kf,kf))
