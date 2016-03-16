@@ -131,6 +131,84 @@ function PowerSpectrumParticles(gp, gd, p)
         @critical("Requested to use PowerSpectrumParticles but did not specify InputPowerSpectrum")
     end
 
+    x = p["x"]
+    initialize_particles_uniform(x)
+
+    #always either store or read white noise used to 
+    #generate initial field
+
+    storewn = true
+    if haskey(conf, "ReadWhiteNoise")
+        storewn = false
+        wnf = open(conf["ReadWhiteNoise"], "r")
+    else
+        wnf = open("wnoise.bin", "w")
+    end
+
+    rank = size(x,1)
+    dims = conf["ParticleDimensions"]
+    ndims = copy(dims)
+    ndims[1] = div(dims[1],2)+1
+    c = zeros(Complex{Float64},ndims...) #
+    Si = zeros(Float64, (rank, (dims[dims .> 1])...))
+    if !storewn
+        wn = reshape(read(wnf, Float64, 2*prod(ndims)), (2,ndims...))
+    end
+    for dd in 1:rank
+        for k in 1:dims[3], j in 1:dims[2], i in 1:ndims[1]
+            kf = fftfreq([i,j,k], dims)
+            k2 = dot(kf,kf)
+            ka = sqrt(k2)
+
+            if !storewn
+                gauss = wn[:,i,j,k]
+            else
+                gauss = randn(2)
+                write(wnf, gauss)
+            end
+
+            PSv = sqrt(P(ka, ps))
+            println(ka)
+            ak = Float64(PSv * gauss[1]/k2)
+            bk = Float64(PSv * gauss[2]/k2)
+
+            if k2 > 0 
+                c[i,j,k] = (ak - im * bk)/2 * kf[dd]
+            end
+        end
+
+        println(summary(c))
+        Si[dd,:] = irfft(squeeze(c), dims[1])
+#        @show size(Si)
+    end
+    close(wnf)
+
+    # Apply displacement field
+    for i in 1:size(x,2)
+        for dd in 1:rank
+            x[dd,i] += Si[dd,i]
+        end
+    end
+    
+    IC_output("ICs.hdf5", x)
+    karr, power = powerSpectrum(gp, gd, p)
+    writePowerSpectrum(karr,power)
+
+    # Setup velocities : Still need to implement ...
+    
+    nothing
+end
+
+
+function PowerSpectrumParticles(gp, gd, p)
+
+    # Initialize a PowerSpectrum if requested
+    if haskey(conf, "InputPowerSpectrum")
+        eval(parse(string("const ps = ", conf["InputPowerSpectrum"])))
+    else
+        @critical("Requested to use PowerSpectrumParticles but did not specify InputPowerSpectrum")
+    end
+
     #always either store or read white noise used to 
     #generate initial field
 
@@ -247,16 +325,16 @@ function PowerSpectrumParticlesConstr(gp, gd, p)
     println(size(Si))
 
     if !storewn
-        wn = reshape(read(wnf, Float64, prod(ndims)), (ndims...))
+        wn = reshape(read(wnf, Float64, 2*prod(ndims)), (2,ndims...))
     end
+
     println(dims)
     for k in 1:dims[3], j in 1:dims[2], i in 1:ndims[1]
         kf = fftfreq([i,j,k], dims)
         k2 = dot(kf,kf)
         ka = sqrt(k2)
         if !storewn
-            gauss = wn[2*(ndims[2] * (ndims[1] * i + j) + k): \
-                       2*(ndims[2] * (ndims[1] * i + j) + k)+1]
+            gauss = wn[:,i,j,k]
         else
             gauss = randn(2)
             write(wnf, gauss)
