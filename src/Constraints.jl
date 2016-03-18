@@ -37,8 +37,6 @@ function getConstraints(nconstr, csupp, pids)
     dims = conf["ParticleDimensions"]
     Npart = prod(dims)
     alpha = zeros(Npart, nconstr)
-    println("Get constraints")
-    println(dims)
     count = 1
     for i in 1:nconstr
         alpha[pids[count:count+csupp[i]-1],i] = 1/Npart
@@ -51,7 +49,6 @@ end
 function evalConstr(C, f, dx)
 
     dims = conf["ParticleDimensions"]
-    println(dims)
     cr = zeros(Complex{Float64}, nconstr)
     ndims = copy(collect(dims))
     ndims[1] = div(dims[1],2)+1
@@ -109,9 +106,6 @@ function constrNoise(C, f, Cij, ec, ecp, dims, dx, ps)
             end
         end
     end
-        
-    f
-
 end
 
 
@@ -156,5 +150,13 @@ function icovConstr(C, dims, dx, ps)
 
 end
     
+function applyConstraints(c, dx, dims)
+    
+    hdr, ci, pid = loadConstraintVector(constrfile)
+    global nconstr = hdr[1]
+    alpha = getConstraints(hdr[1], hdr[2], pid)
+    cr = evalConstr(alpha,c,dx)
+    Cij = icovConstr(alpha, dims, dx, ps)
+    constrNoise(alpha, c, Cij, cr, ci, dims, dx, ps)
 
-
+end
